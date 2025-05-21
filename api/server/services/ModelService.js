@@ -224,7 +224,69 @@ const getOpenAIModels = async (opts) => {
     return models;
   }
 
+  // If using a sentinel "user_provided" API key, attempt to fetch models with the user-supplied key
   if (userProvidedOpenAI) {
+    try {
+      const { getUserKeyValues } = require('~/server/services/UserService');
+      const userValues = await getUserKeyValues({ userId: opts.user, name: EModelEndpoint.openAI });
+      const userApiKey = userValues?.apiKey;
+      if (userApiKey) {
+        // Determine effective base URL
+        const openaiBaseURL = 'https://api.openai.com/v1';
+        let baseURL = openaiBaseURL;
+        let reverseProxyUrl = process.env.OPENAI_REVERSE_PROXY;
+        if (opts.assistants && process.env.ASSISTANTS_BASE_URL) {
+          reverseProxyUrl = process.env.ASSISTANTS_BASE_URL;
+        } else if (opts.azure) {
+          return models;
+        }
+        if (reverseProxyUrl) {
+          baseURL = extractBaseURL(reverseProxyUrl);
+        }
+        // Check cache first
+        const modelsCache = getLogStores(CacheKeys.MODEL_QUERIES);
+        const cached = await modelsCache.get(baseURL);
+        if (cached) {
+          return cached;
+        }
+        // Fetch models using the user-provided key
+        let fetched = await fetchModels({
+          user: opts.user,
+          apiKey: userApiKey,
+          baseURL,
+          name: EModelEndpoint.openAI,
+        });
+        // Fallback to defaults if none fetched
+        if (!fetched?.length) {
+          return models;
+        }
+        // Apply OpenAI model filters when using the official API
+        if (baseURL === openaiBaseURL) {
+          const regex = /(text-davinci-003|gpt-|o\d+)/;
+          const exclude = /audio|realtime/;
+          fetched = fetched.filter((m) => regex.test(m) && !exclude.test(m));
+          const instruct = fetched.filter((m) => m.includes('instruct'));
+          const other = fetched.filter((m) => !m.includes('instruct'));
+          fetched = other.concat(instruct);
+        }
+        // Apply plugin filters if requested
+        if (opts.plugins) {
+          fetched = fetched.filter(
+            (m) =>
+              !m.includes('text-davinci') &&
+              !m.includes('instruct') &&
+              !m.includes('0613') &&
+              !m.includes('0314') &&
+              !m.includes('0301'),
+          );
+        }
+        // Cache and return
+        await modelsCache.set(baseURL, fetched);
+        return fetched;
+      }
+    } catch (err) {
+      // ignore and fallback to defaults
+    }
     return models;
   }
 
@@ -295,7 +357,45 @@ const getAnthropicModels = async (opts = {}) => {
     return models;
   }
 
+  // If using a sentinel "user_provided" Anthropic key, attempt to fetch models with the user-supplied key
   if (isUserProvided(process.env.ANTHROPIC_API_KEY)) {
+    // Attempt to use the user-supplied Anthropic key from UserService
+    let userApiKey;
+    const userSvc = require('~/server/services/UserService');
+    try {
+      const userValues = await userSvc.getUserKeyValues({ userId: opts.user, name: EModelEndpoint.anthropic });
+      userApiKey = userValues?.apiKey;
+    } catch {
+      try {
+        userApiKey = await userSvc.getUserKey({ userId: opts.user, name: EModelEndpoint.anthropic });
+      } catch {
+        // No valid user key available
+        return models;
+      }
+    }
+    if (userApiKey) {
+      const anthroBase = 'https://api.anthropic.com/v1';
+      let baseURL = anthroBase;
+      const reverseProxy = process.env.ANTHROPIC_REVERSE_PROXY;
+      if (reverseProxy) {
+        baseURL = extractBaseURL(reverseProxy);
+      }
+      const modelsCache = getLogStores(CacheKeys.MODEL_QUERIES);
+      const cached = await modelsCache.get(baseURL);
+      if (cached) {
+        return cached;
+      }
+      const fetched = await fetchModels({
+        user: opts.user,
+        apiKey: userApiKey,
+        baseURL,
+        name: EModelEndpoint.anthropic,
+        tokenKey: EModelEndpoint.anthropic,
+      });
+      const result = fetched && fetched.length ? fetched : models;
+      await modelsCache.set(baseURL, result);
+      return result;
+    }
     return models;
   }
 
@@ -307,12 +407,55 @@ const getAnthropicModels = async (opts = {}) => {
   }
 };
 
-const getGoogleModels = () => {
-  let models = defaultModels[EModelEndpoint.google];
+/**
+ * Retrieves Google/Gemini models, supporting direct or user_provided API keys.
+ * @param {object} opts - Options including user ID.
+ * @returns {string[]|Promise<string[]>} List of model identifiers or a promise resolving to the list.
+ */
+const getGoogleModels = (opts = {}) => {
+  const models = defaultModels[EModelEndpoint.google];
+  // ENV override for explicit model list
   if (process.env.GOOGLE_MODELS) {
-    models = splitAndTrim(process.env.GOOGLE_MODELS);
+    return splitAndTrim(process.env.GOOGLE_MODELS);
   }
-
+  const envKey = process.env.GOOGLE_KEY;
+  const reverseProxy = process.env.GOOGLE_REVERSE_PROXY;
+  // If an API key is provided (directly or via sentinel), fetch dynamically
+  if (envKey) {
+    return (async () => {
+      try {
+        let apiKey = envKey;
+        if (isUserProvided(envKey)) {
+          const { getUserKeyValues } = require('~/server/services/UserService');
+          const userValues = await getUserKeyValues({ userId: opts.user, name: EModelEndpoint.google });
+          apiKey = userValues?.apiKey;
+        }
+        if (!apiKey) return models;
+        // Build models URL
+        let modelsUrl = 'https://generativelanguage.googleapis.com/v1/models';
+        if (reverseProxy) {
+          modelsUrl = extractBaseURL(reverseProxy).replace(/\/$/, '') + '/models';
+        }
+        const cache = getLogStores(CacheKeys.MODEL_QUERIES);
+        const cached = await cache.get(modelsUrl);
+        if (cached) return cached;
+        const urlObj = new URL(modelsUrl);
+        urlObj.searchParams.set('key', apiKey);
+        const res = await axios.get(urlObj.toString(), { timeout: 5000 });
+        const data = res.data;
+        const fetched = Array.isArray(data.models)
+          ? data.models.map((m) => {
+              const nm = m.name || m.model || '';
+              return nm.includes('/') ? nm.split('/').pop() : nm;
+            })
+          : [];
+        await cache.set(modelsUrl, fetched);
+        return fetched.length ? fetched : models;
+      } catch {
+        return models;
+      }
+    })();
+  }
   return models;
 };
 

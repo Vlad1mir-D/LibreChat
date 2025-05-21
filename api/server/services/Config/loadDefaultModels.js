@@ -52,7 +52,8 @@ async function loadDefaultModels(req) {
         logger.error('Error fetching Azure OpenAI Assistants API models:', error);
         return [];
       }),
-      Promise.resolve(getGoogleModels()).catch((error) => {
+      // fetch Google models, passing user ID for dynamic user_provided support
+      Promise.resolve(getGoogleModels({ user: req.user.id })).catch((error) => {
         logger.error('Error getting Google models:', error);
         return [];
       }),

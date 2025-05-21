@@ -5,7 +5,7 @@ const {
   verifyBackupCode,
   getTOTPSecret,
 } = require('~/server/services/twoFactorService');
-const { updateUser, getUserById } = require('~/models');
+const { updateUser, getUserById } = require('~/models/userMethods');
 const { logger } = require('~/config');
 const { encryptV3 } = require('~/server/utils/crypto');
 

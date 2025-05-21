@@ -72,19 +72,44 @@ async function loadConfigModels(req) {
 
     modelsConfig[name] = [];
 
-    if (models.fetch && !isUserProvided(API_KEY) && !isUserProvided(BASE_URL)) {
-      fetchPromisesMap[uniqueKey] =
-        fetchPromisesMap[uniqueKey] ||
-        fetchModels({
-          user: req.user.id,
-          baseURL: BASE_URL,
-          apiKey: API_KEY,
-          name,
-          userIdQuery: models.userIdQuery,
-        });
-      uniqueKeyToEndpointsMap[uniqueKey] = uniqueKeyToEndpointsMap[uniqueKey] || [];
-      uniqueKeyToEndpointsMap[uniqueKey].push(name);
-      continue;
+    // handle fetching models when configured
+    if (models.fetch) {
+      // defer import to break circular dependency
+      const { getUserKeyValues } = require('~/server/services/UserService');
+      let apiKeyToUse = API_KEY;
+      let baseURLToUse = BASE_URL;
+      // support user-provided API key or baseURL
+      if (isUserProvided(API_KEY) || isUserProvided(BASE_URL)) {
+        try {
+          const userValues = await getUserKeyValues({ userId: req.user.id, name });
+          if (isUserProvided(API_KEY)) {
+            apiKeyToUse = userValues?.apiKey;
+          }
+          if (isUserProvided(BASE_URL)) {
+            baseURLToUse = userValues?.baseURL;
+          }
+        } catch (e) {
+          // no user key available, fall back to default models
+          apiKeyToUse = null;
+          baseURLToUse = null;
+        }
+      }
+      // proceed to fetch if both key and URL are resolved
+      if (apiKeyToUse && baseURLToUse) {
+        const resolvedKey = `${baseURLToUse}__${apiKeyToUse}`;
+        fetchPromisesMap[resolvedKey] =
+          fetchPromisesMap[resolvedKey] ||
+          fetchModels({
+            user: req.user.id,
+            baseURL: baseURLToUse,
+            apiKey: apiKeyToUse,
+            name,
+            userIdQuery: models.userIdQuery,
+          });
+        uniqueKeyToEndpointsMap[resolvedKey] = uniqueKeyToEndpointsMap[resolvedKey] || [];
+        uniqueKeyToEndpointsMap[resolvedKey].push(name);
+        continue;
+      }
     }
 
     if (Array.isArray(models.default)) {
