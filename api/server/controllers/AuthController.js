@@ -6,7 +6,8 @@ const {
   setAuthTokens,
   requestPasswordReset,
 } = require('~/server/services/AuthService');
-const { findSession, getUserById, deleteAllUserSessions } = require('~/models');
+const { findSession, deleteAllUserSessions } = require('~/models');
+const { getUserById } = require('~/models/userMethods');
 const { logger } = require('~/config');
 
 const registrationController = async (req, res) => {

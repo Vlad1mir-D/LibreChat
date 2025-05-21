@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const { getBalanceConfig } = require('~/server/services/Config');
+const { getBalanceConfig } = require('~/server/services/Config/getCustomConfig');
 const signPayload = require('~/server/services/signPayload');
 const Balance = require('./Balance');
 const User = require('./User');

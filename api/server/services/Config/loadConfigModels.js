@@ -1,6 +1,5 @@
 const { EModelEndpoint, extractEnvVariable, CacheKeys } = require('librechat-data-provider');
 const { fetchModels } = require('~/server/services/ModelService');
-const { getUserKeyWithExpiry } = require('../UserService');
 const { isUserProvided, normalizeEndpointName } = require('~/server/utils');
 const { getCustomConfig } = require('./getCustomConfig');
 const getLogStores = require('~/cache/getLogStores');
@@ -73,6 +72,8 @@ async function loadConfigModels(req) {
     modelsConfig[name] = [];
     /** if key user provided and not expired use it instead of user_defined */
     if (models.fetch && isUserProvided(API_KEY)) {
+      // defer import to break circular dependency
+      const { getUserKeyWithExpiry } = require('../UserService');
       try {
         const userKey = await getUserKeyWithExpiry({ userId: req.user.id, name });
         if (!userKey.expiresAt || new Date(userKey.expiresAt).getTime() > Date.now()) {

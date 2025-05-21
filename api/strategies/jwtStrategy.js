@@ -1,6 +1,6 @@
 const { SystemRoles } = require('librechat-data-provider');
 const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
-const { getUserById, updateUser } = require('~/models');
+const { getUserById, updateUser } = require('~/models/userMethods');
 const { logger } = require('~/config');
 
 // JWT strategy
